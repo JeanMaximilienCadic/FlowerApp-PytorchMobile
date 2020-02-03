@@ -150,29 +150,39 @@ def load_data_folder(data_folder="data", batch_size=64):
 
     return train_dataloader, valid_dataloader, train_dataset.class_to_idx
 
+def replace_head(model):
+    for param in model.parameters():
+        param.requires_grad = False
+
+    last_child = list(model.children())[-1]
+    if type(last_child) == torch.nn.modules.linear.Linear:
+        input_features = last_child.in_features
+        head = torch.nn.Sequential(OrderedDict([
+            ('fc1', nn.Linear(input_features, 4096)),
+            ('relu', nn.ReLU()),
+            ('dropout', nn.Dropout(p=0.5)),
+            ('fc2', nn.Linear(4096, len(class_idx_mapping))),
+            ('output', nn.LogSoftmax(dim=1))]))
+        model.fc = head
+    elif type(last_child) == torch.nn.Sequential:
+        input_features = list(last_child.children())[0].in_features
+        head = torch.nn.Sequential(OrderedDict([
+            ('fc1', nn.Linear(input_features, 4096)),
+            ('relu', nn.ReLU()),
+            ('dropout', nn.Dropout(p=0.5)),
+            ('fc2', nn.Linear(4096, len(class_idx_mapping))),
+            ('output', nn.LogSoftmax(dim=1))]))
+        model.classifier = head
+    return model
+
+
 def build_model(arch="vgg16", class_idx_mapping=None):
     my_local = dict()
     exec("model = models.{}(pretrained=True)".format(arch), globals(), my_local)
 
     model =  my_local['model']
-    last_child = list(model.children())[-1]
-
-    if type(last_child) == torch.nn.modules.linear.Linear:
-        input_features = last_child.in_features
-    else:
-        input_features = list(last_child.children())[0].in_features
-
-    for param in model.parameters():
-        param.requires_grad = False
-
-    classifier = nn.Sequential(OrderedDict([
-                                            ('fc1', nn.Linear(input_features, 4096)),
-                                            ('relu', nn.ReLU()),
-                                            ('dropout', nn.Dropout(p=0.5)),
-                                            ('fc2', nn.Linear(4096, len(class_idx_mapping))),
-                                            ('output', nn.LogSoftmax(dim=1))
-                                            ]))
-    model.classifier = classifier
+    model = replace_head(model)
+    model.class_idx_mapping = class_idx_mapping
     return model
 
 
@@ -201,12 +211,11 @@ if __name__ == '__main__':
                                                                                batch_size=args["batch_size"])
 
     device = torch.device("cuda:0")
-    model = build_model(arch="vgg16", class_idx_mapping=class_idx_mapping)
+    model = build_model(arch="resnet34", class_idx_mapping=class_idx_mapping)
     model.to(device)
     summary(model, input_size=(3, 224, 224))
     criterion = nn.NLLLoss()
-    optimizer = optim.Adam(model.classifier.parameters(), lr=args["learning_rate"])
-
+    optimizer = optim.Adam(list(model.children())[-1].parameters(), lr=args["learning_rate"])
     train(model=model,
           trainloader=train_dataloader,
           validloader=valid_dataloader,
