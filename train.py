@@ -31,6 +31,25 @@ def validation(model, testloader, criterion, device):
     return test_loss, accuracy
 
 
+def evaluate_model(model, validloader,e ,epochs, running_loss, print_every):
+    # Make sure network is in eval mode for inference
+    model.eval()
+
+    # Turn off gradients for validation, saves memory and computations
+    with torch.no_grad():
+        validation_loss, accuracy = validation(model, validloader, criterion, device)
+
+    print("Epoch: {}/{}.. ".format(e + 1, epochs),
+          "Training Loss: {:.3f}.. ".format(running_loss / print_every),
+          "Validation Loss: {:.3f}.. ".format(validation_loss / len(validloader)),
+          "Validation Accuracy: {:.3f}".format((accuracy / len(validloader)) * 100))
+
+    model.train()
+
+    return 0, accuracy
+
+
+
 def train(model, trainloader, validloader, epochs, print_every, criterion, optimizer, model_dir="models"):
     epochs = epochs
     print_every = print_every
@@ -42,7 +61,7 @@ def train(model, trainloader, validloader, epochs, print_every, criterion, optim
     best_accuracy = 0
     for e in range(epochs):
         running_loss = 0
-
+        accuracy = None
         for (images, labels) in trainloader:
             steps += 1
 
@@ -59,23 +78,11 @@ def train(model, trainloader, validloader, epochs, print_every, criterion, optim
             running_loss += loss.item()
 
             if steps % print_every == 0:
-                
-                # Make sure network is in eval mode for inference
-                model.eval()
+                running_loss, accuracy = evaluate_model(model, validloader, e, epochs, running_loss, print_every)
 
-                # Turn off gradients for validation, saves memory and computations
-                with torch.no_grad():
-                    validation_loss, accuracy = validation(model, validloader, criterion, device)
+        if accuracy is None:
+            running_loss, accuracy = evaluate_model(model, validloader, e, epochs, running_loss, print_every)
 
-                print("Epoch: {}/{}.. ".format(e+1, epochs),
-                      "Training Loss: {:.3f}.. ".format(running_loss/print_every),
-                      "Validation Loss: {:.3f}.. ".format(validation_loss/len(validloader)),
-                      "Validation Accuracy: {:.3f}".format((accuracy/len(validloader))*100))
-
-                model.train()
-                
-                running_loss = 0
-        
         is_best = accuracy > best_accuracy
         best_accuracy = max(accuracy, best_accuracy)
         save_checkpoint({
@@ -90,8 +97,7 @@ def train(model, trainloader, validloader, epochs, print_every, criterion, optim
 def save_checkpoint(state, is_best=False, model_dir="models", filename='checkpoint.pth'):
     torch.save(state, os.path.join(model_dir, filename))
     if is_best:
-        shutil.copyfile(filename, os.path.join(model_dir,'model_best.pth'))
-
+        shutil.copyfile(os.path.join(model_dir, filename), os.path.join(model_dir,'model_best.pth'))
 
 def check_accuracy_on_test(testloader, model):    
     correct = 0
@@ -164,6 +170,7 @@ def replace_head(model):
             ('fc2', nn.Linear(4096, len(class_idx_mapping))),
             ('output', nn.LogSoftmax(dim=1))]))
         model.fc = head
+        model.classifier = model.fc
     elif type(last_child) == torch.nn.Sequential:
         input_features = list(last_child.children())[0].in_features
         head = torch.nn.Sequential(OrderedDict([
@@ -180,7 +187,7 @@ def build_model(arch="vgg16", class_idx_mapping=None):
     my_local = dict()
     exec("model = models.{}(pretrained=True)".format(arch), globals(), my_local)
 
-    model =  my_local['model']
+    model = my_local['model']
     model = replace_head(model)
     model.class_idx_mapping = class_idx_mapping
     return model
@@ -215,7 +222,8 @@ if __name__ == '__main__':
     model.to(device)
     summary(model, input_size=(3, 224, 224))
     criterion = nn.NLLLoss()
-    optimizer = optim.Adam(list(model.children())[-1].parameters(), lr=args["learning_rate"])
+    # optimizer = optim.Adam(list(model.children())[-1].parameters(), lr=args["learning_rate"])
+    optimizer = optim.Adam(model.classifier.parameters(), lr=args["learning_rate"])
     train(model=model,
           trainloader=train_dataloader,
           validloader=valid_dataloader,
