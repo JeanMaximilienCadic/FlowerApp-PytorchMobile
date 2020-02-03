@@ -50,7 +50,7 @@ def evaluate_model(model, validloader,e ,epochs, running_loss, print_every):
 
 
 
-def train(model, trainloader, validloader, epochs, print_every, criterion, optimizer, model_dir="models"):
+def train(model, trainloader, validloader, epochs, print_every, criterion, optimizer, arch, model_dir="models"):
     epochs = epochs
     print_every = print_every
     steps = 0
@@ -92,12 +92,12 @@ def train(model, trainloader, validloader, epochs, print_every, criterion, optim
             'optimizer' : optimizer.state_dict(),
             'class_idx_mapping': model.class_idx_mapping,
             'best_accuracy': (best_accuracy/len(validloader))*100
-            }, is_best, model_dir, 'checkpoint.pth')
+            }, arch=arch, is_best=is_best, model_dir=model_dir, filename=f'{arch}.ckpt.pth')
 
-def save_checkpoint(state, is_best=False, model_dir="models", filename='checkpoint.pth'):
+def save_checkpoint(state, arch, is_best=False, model_dir="models", filename='checkpoint.pth'):
     torch.save(state, os.path.join(model_dir, filename))
     if is_best:
-        shutil.copyfile(os.path.join(model_dir, filename), os.path.join(model_dir,'model_best.pth'))
+        shutil.copyfile(os.path.join(model_dir, filename), os.path.join(model_dir,f'{arch}.pth'))
 
 def check_accuracy_on_test(testloader, model):    
     correct = 0
@@ -202,10 +202,13 @@ if __name__ == '__main__':
                     default=0.001, type=float)
 
     ap.add_argument("--epochs", help="Number of iterations over the whole dataset. (default: 3)",
-                    default=10, type=int)
+                    default=100, type=int)
 
     ap.add_argument("--model_dir", help="Directory which will contain the model checkpoints.",
                     default="models")
+
+    ap.add_argument("--arch", help="Directory which will contain the model checkpoints.",
+                    default="densenet161")
 
     ap.add_argument("--batch_size",
                     default=1, type=int)
@@ -218,7 +221,7 @@ if __name__ == '__main__':
                                                                                batch_size=args["batch_size"])
 
     device = torch.device("cuda:0")
-    model = build_model(arch="resnet34", class_idx_mapping=class_idx_mapping)
+    model = build_model(arch=args["arch"], class_idx_mapping=class_idx_mapping)
     model.to(device)
     summary(model, input_size=(3, 224, 224))
     criterion = nn.NLLLoss()
@@ -229,6 +232,7 @@ if __name__ == '__main__':
           validloader=valid_dataloader,
           epochs=args["epochs"],
           print_every=20,
+          arch=args["arch"],
           criterion=criterion,
           optimizer=optimizer,
           model_dir=args["model_dir"])
