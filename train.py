@@ -11,6 +11,7 @@ import torchvision
 import shutil
 import argparse
 import os
+from torchsummary import summary
 
 def validation(model, testloader, criterion, device):
     test_loss = 0
@@ -30,15 +31,13 @@ def validation(model, testloader, criterion, device):
     return test_loss, accuracy
 
 
-def train(model, trainloader, validloader, epochs, print_every, criterion, optimizer, arch="vgg16", device='cuda', model_dir="models"):
+def train(model, trainloader, validloader, epochs, print_every, criterion, optimizer, model_dir="models"):
     epochs = epochs
     print_every = print_every
     steps = 0
     
     # Change to train mode if not already
     model.train()
-    # change to cuda
-    model.to(device)
 
     best_accuracy = 0
     for e in range(epochs):
@@ -85,7 +84,6 @@ def train(model, trainloader, validloader, epochs, print_every, criterion, optim
             'state_dict': model.state_dict(),
             'optimizer' : optimizer.state_dict(),
             'class_idx_mapping': model.class_idx_mapping,
-            'arch': arch,
             'best_accuracy': (best_accuracy/len(validloader))*100
             }, is_best, model_dir, 'checkpoint.pth')
 
@@ -152,7 +150,7 @@ def load_data_folder(data_folder="data", batch_size=64):
 
     return train_dataloader, valid_dataloader, train_dataset.class_to_idx
 
-def build_model(arch="vgg16", hidden_units=4096, class_idx_mapping=None):
+def build_model(arch="vgg16", class_idx_mapping=None):
     my_local = dict()
     exec("model = models.{}(pretrained=True)".format(arch), globals(), my_local)
 
@@ -161,32 +159,27 @@ def build_model(arch="vgg16", hidden_units=4096, class_idx_mapping=None):
 
     if type(last_child) == torch.nn.modules.linear.Linear:
         input_features = last_child.in_features
-    elif type(last_child) == torch.nn.modules.container.Sequential:
-        input_features = last_child[0].in_features
+    else:
+        input_features = list(last_child.children())[0].in_features
 
     for param in model.parameters():
         param.requires_grad = False
 
     classifier = nn.Sequential(OrderedDict([
-                                            ('fc1', nn.Linear(input_features, hidden_units)),
+                                            ('fc1', nn.Linear(input_features, 4096)),
                                             ('relu', nn.ReLU()),
                                             ('dropout', nn.Dropout(p=0.5)),
-                                            ('fc2', nn.Linear(hidden_units, 102)),
+                                            ('fc2', nn.Linear(4096, len(class_idx_mapping))),
                                             ('output', nn.LogSoftmax(dim=1))
                                             ]))
-    
     model.classifier = classifier
-    model.class_idx_mapping = class_idx_mapping
-
     return model
 
-def main():
+
+if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument("data_dir", help="Directory containing the dataset.",
                     default="data", nargs="?")
-
-    ap.add_argument("--hidden_units", help="Number of units the hidden layer should consist of. (default: 4096)",
-                    default=4096, type=int)
 
     ap.add_argument("--learning_rate", help="Learning rate for Adam optimizer. (default: 0.001)",
                     default=0.001, type=float)
@@ -198,34 +191,32 @@ def main():
                     default="models")
 
     ap.add_argument("--batch_size",
-                    default=256, type=int)
+                    default=1, type=int)
 
     args = vars(ap.parse_args())
 
     os.system("mkdir -p " + args["model_dir"])
 
-    (train_dataloader, valid_dataloader, class_idx_mapping) = load_data_folder(data_folder=args["data_dir"], batch_size=args["batch_size"])
-    
-    model = build_model(arch="resnet18", hidden_units=args["hidden_units"], class_idx_mapping=class_idx_mapping)
+    (train_dataloader, valid_dataloader, class_idx_mapping) = load_data_folder(data_folder=args["data_dir"],
+                                                                               batch_size=args["batch_size"])
 
+    device = torch.device("cuda:0")
+    model = build_model(arch="vgg16", class_idx_mapping=class_idx_mapping)
+    model.to(device)
+    summary(model, input_size=(3, 224, 224))
     criterion = nn.NLLLoss()
     optimizer = optim.Adam(model.classifier.parameters(), lr=args["learning_rate"])
 
-    train(model=model, 
-        trainloader=train_dataloader, 
-        validloader=valid_dataloader,
-        epochs=args["epochs"], 
-        print_every=20, 
-        criterion=criterion,
-        optimizer=optimizer,
-        arch=args["arch"],
-        device=torch.device("cuda:0"),
-        model_dir=args["model_dir"])
-
-if __name__ == '__main__':
-    main()
-    model = torchvision.models.resnet18(pretrained=True)  
-    model.eval()
-    example = torch.rand(1, 3, 224, 224)
-    traced_script_module = torch.jit.trace(model, example)
-    traced_script_module.save("android/app/src/main/assets/model.pt")
+    train(model=model,
+          trainloader=train_dataloader,
+          validloader=valid_dataloader,
+          epochs=args["epochs"],
+          print_every=20,
+          criterion=criterion,
+          optimizer=optimizer,
+          model_dir=args["model_dir"])
+    # model = torchvision.models.resnet18(pretrained=True)
+    # model.eval()
+    # example = torch.rand(1, 3, 224, 224)
+    # traced_script_module = torch.jit.trace(model, example)
+    # traced_script_module.save("android/app/src/main/assets/model.pt")
